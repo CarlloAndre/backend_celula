@@ -40,7 +40,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ message: "Error en el servidor.", error });
   }
 };
-
+//hola amigos del señor
 // POST /api/auth/register  (crear el admin inicial; se puede deshabilitar luego)
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
