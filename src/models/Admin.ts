@@ -4,11 +4,16 @@ import { IAdmin } from "../types";
 
 const adminSchema = new Schema<IAdmin>(
   {
-    username: { type: String, required: true, unique: true, trim: true },
+    torneoId: { type: Schema.Types.ObjectId, ref: "Torneo", required: true },
+    username: { type: String, required: true, trim: true },
     password: { type: String, required: true },
   },
   { timestamps: true }
 );
+
+// El username solo debe ser único DENTRO de cada torneo (no globalmente),
+// así dos torneos pueden tener un admin con el mismo username si quisieran.
+adminSchema.index({ torneoId: 1, username: 1 }, { unique: true });
 
 // Hashear contraseña antes de guardar
 adminSchema.pre("save", async function (next) {

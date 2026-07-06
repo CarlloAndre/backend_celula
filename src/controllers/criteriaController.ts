@@ -1,10 +1,18 @@
 import { Request, Response } from "express";
 import Criteria from "../models/Criteria";
+import { AuthRequest } from "../middleware/auth";
 
-// GET /api/criteria  (todos, o solo activos con ?activo=true)
+// GET /api/criteria?torneoId=...  (todos, o solo activos con ?activo=true)
 export const getCriteria = async (req: Request, res: Response): Promise<void> => {
   try {
-    const filter: Record<string, unknown> = {};
+    const { torneoId } = req.query;
+
+    if (!torneoId) {
+      res.status(400).json({ message: "Se requiere torneoId." });
+      return;
+    }
+
+    const filter: Record<string, unknown> = { torneoId };
     if (req.query.activo === "true") filter.activo = true;
 
     const criteria = await Criteria.find(filter).sort({ createdAt: 1 });
@@ -15,9 +23,19 @@ export const getCriteria = async (req: Request, res: Response): Promise<void> =>
 };
 
 // POST /api/criteria  (crear nuevo criterio - solo admin)
-export const createCriteria = async (req: Request, res: Response): Promise<void> => {
+export const createCriteria = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { nombre, tipo, puntos, puntosMaximos } = req.body;
+    const { torneoId, nombre, tipo, puntos, puntosMaximos } = req.body;
+
+    if (!torneoId) {
+      res.status(400).json({ message: "Se requiere torneoId." });
+      return;
+    }
+
+    if (torneoId !== req.adminTorneoId) {
+      res.status(403).json({ message: "No tienes acceso a este torneo." });
+      return;
+    }
 
     if (!nombre) {
       res.status(400).json({ message: "El nombre es requerido." });
@@ -37,6 +55,7 @@ export const createCriteria = async (req: Request, res: Response): Promise<void>
     }
 
     const criteria = await Criteria.create({
+      torneoId,
       nombre,
       tipo: tipoFinal,
       puntos: tipoFinal === "checkbox" ? puntos : 0,
@@ -49,10 +68,20 @@ export const createCriteria = async (req: Request, res: Response): Promise<void>
 };
 
 // PUT /api/criteria/:id  (editar criterio - solo admin)
-export const updateCriteria = async (req: Request, res: Response): Promise<void> => {
+export const updateCriteria = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
     const { nombre, tipo, puntos, puntosMaximos, activo } = req.body;
+
+    const existente = await Criteria.findById(id);
+    if (!existente) {
+      res.status(404).json({ message: "Criterio no encontrado." });
+      return;
+    }
+    if (existente.torneoId.toString() !== req.adminTorneoId) {
+      res.status(403).json({ message: "No tienes acceso a este torneo." });
+      return;
+    }
 
     const cambios: Record<string, unknown> = { nombre, activo };
     if (tipo !== undefined) cambios.tipo = tipo;
@@ -64,11 +93,6 @@ export const updateCriteria = async (req: Request, res: Response): Promise<void>
       runValidators: true,
     });
 
-    if (!criteria) {
-      res.status(404).json({ message: "Criterio no encontrado." });
-      return;
-    }
-
     res.json(criteria);
   } catch (error) {
     res.status(500).json({ message: "Error al actualizar criterio.", error });
@@ -76,16 +100,21 @@ export const updateCriteria = async (req: Request, res: Response): Promise<void>
 };
 
 // DELETE /api/criteria/:id  (eliminar criterio - solo admin)
-export const deleteCriteria = async (req: Request, res: Response): Promise<void> => {
+export const deleteCriteria = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const deleted = await Criteria.findByIdAndDelete(id);
 
-    if (!deleted) {
+    const existente = await Criteria.findById(id);
+    if (!existente) {
       res.status(404).json({ message: "Criterio no encontrado." });
       return;
     }
+    if (existente.torneoId.toString() !== req.adminTorneoId) {
+      res.status(403).json({ message: "No tienes acceso a este torneo." });
+      return;
+    }
 
+    await Criteria.findByIdAndDelete(id);
     res.json({ message: "Criterio eliminado correctamente." });
   } catch (error) {
     res.status(500).json({ message: "Error al eliminar criterio.", error });

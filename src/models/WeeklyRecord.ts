@@ -12,6 +12,7 @@ const checkItemSchema = new Schema(
 
 const weeklyRecordSchema = new Schema<IWeeklyRecord>(
   {
+    torneoId: { type: Schema.Types.ObjectId, ref: "Torneo", required: true },
     weekId: { type: Schema.Types.ObjectId, ref: "Week", required: true },
     participantId: { type: Schema.Types.ObjectId, ref: "Participant", required: true },
     checks: { type: [checkItemSchema], default: [] },

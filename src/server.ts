@@ -8,6 +8,7 @@ import criteriaRoutes from "./routes/criteriaRoutes";
 import participantRoutes from "./routes/participantRoutes";
 import weekRoutes from "./routes/weekRoutes";
 import weeklyRecordRoutes from "./routes/weeklyRecordRoutes";
+import torneoRoutes from "./routes/torneoRoutes";
 
 dotenv.config();
 
@@ -18,6 +19,7 @@ app.use(cors());
 app.use(express.json());
 
 // Rutas
+app.use("/api/torneos", torneoRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/criteria", criteriaRoutes);
 app.use("/api/participants", participantRoutes);

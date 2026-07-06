@@ -3,10 +3,12 @@ import WeeklyRecord from "../models/WeeklyRecord";
 import Criteria from "../models/Criteria";
 import Participant from "../models/Participant";
 import { IWeeklyRecord, ICriteria } from "../types";
+import { AuthRequest } from "../middleware/auth";
 
 // Recalcula los puntos totales de un participante sumando TODOS sus registros semanales.
 // Se llama cada vez que se guarda/edita un registro, así el total siempre queda exacto
 // incluso si el admin corrige una semana pasada.
+// (No hace falta filtrar por torneo aquí: un participantId ya pertenece a un solo torneo.)
 const recalcularPuntosTotales = async (participantId: string): Promise<void> => {
   const records = await WeeklyRecord.find({ participantId });
   const total = records.reduce(
@@ -16,17 +18,17 @@ const recalcularPuntosTotales = async (participantId: string): Promise<void> => 
   await Participant.findByIdAndUpdate(participantId, { puntosTotales: total });
 };
 
-// GET /api/weekly-records?weekId=...  -> todos los registros de una semana (con detalle)
+// GET /api/weekly-records?weekId=...&torneoId=...  -> todos los registros de una semana (con detalle)
 export const getRecordsByWeek = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { weekId } = req.query;
+    const { weekId, torneoId } = req.query;
 
-    if (!weekId) {
-      res.status(400).json({ message: "Se requiere weekId." });
+    if (!weekId || !torneoId) {
+      res.status(400).json({ message: "Se requiere weekId y torneoId." });
       return;
     }
 
-    const records = await WeeklyRecord.find({ weekId })
+    const records = await WeeklyRecord.find({ weekId, torneoId })
       .populate("participantId", "nombre foto activo")
       .populate("checks.criteriaId", "nombre puntos tipo puntosMaximos");
 
@@ -56,16 +58,21 @@ export const getRecordsByParticipant = async (
 };
 
 // POST /api/weekly-records  (crear o actualizar el registro de un participante en una semana)
-// Body: { weekId, participantId, checks: [{ criteriaId, marcado }] }
+// Body: { torneoId, weekId, participantId, checks: [{ criteriaId, marcado }] }
 // Es "upsert": si ya existe el registro para esa semana+participante, lo actualiza (siempre editable).
-export const saveRecord = async (req: Request, res: Response): Promise<void> => {
+export const saveRecord = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { weekId, participantId, checks } = req.body;
+    const { torneoId, weekId, participantId, checks } = req.body;
 
-    if (!weekId || !participantId || !Array.isArray(checks)) {
+    if (!torneoId || !weekId || !participantId || !Array.isArray(checks)) {
       res.status(400).json({
-        message: "weekId, participantId y checks (array) son requeridos.",
+        message: "torneoId, weekId, participantId y checks (array) son requeridos.",
       });
+      return;
+    }
+
+    if (torneoId !== req.adminTorneoId) {
+      res.status(403).json({ message: "No tienes acceso a este torneo." });
       return;
     }
 
@@ -97,7 +104,7 @@ export const saveRecord = async (req: Request, res: Response): Promise<void> => 
 
     const record = await WeeklyRecord.findOneAndUpdate(
       { weekId, participantId },
-      { weekId, participantId, checks: checksNormalizados, puntosGanados },
+      { torneoId, weekId, participantId, checks: checksNormalizados, puntosGanados },
       { new: true, upsert: true, runValidators: true }
     );
 
@@ -114,10 +121,17 @@ export const saveRecord = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
-// GET /api/weekly-records/leaderboard -> Top de participantes ordenado por puntos
+// GET /api/weekly-records/leaderboard?torneoId=... -> Top de participantes ordenado por puntos
 export const getLeaderboard = async (req: Request, res: Response): Promise<void> => {
   try {
-    const top = await Participant.find({ activo: true }).sort({
+    const { torneoId } = req.query;
+
+    if (!torneoId) {
+      res.status(400).json({ message: "Se requiere torneoId." });
+      return;
+    }
+
+    const top = await Participant.find({ torneoId, activo: true }).sort({
       puntosTotales: -1,
     });
     res.json(top);

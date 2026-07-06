@@ -1,7 +1,17 @@
 import { Document, Types } from "mongoose";
 
+// ---------- Torneo (contenedor raíz: cada torneo es independiente) ----------
+export interface ITorneo extends Document {
+  nombre: string;
+  slug: string;
+  activo: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ---------- Admin / Usuario principal ----------
 export interface IAdmin extends Document {
+  torneoId: Types.ObjectId;
   username: string;
   password: string;
   comparePassword(candidate: string): Promise<boolean>;
@@ -11,6 +21,7 @@ export interface IAdmin extends Document {
 export type TipoCriterio = "checkbox" | "manual";
 
 export interface ICriteria extends Document {
+  torneoId: Types.ObjectId;
   nombre: string;
   tipo: TipoCriterio;
   puntos: number; // usado cuando tipo = "checkbox" (puntaje fijo)
@@ -22,6 +33,7 @@ export interface ICriteria extends Document {
 
 // ---------- Participante del torneo ----------
 export interface IParticipant extends Document {
+  torneoId: Types.ObjectId;
   nombre: string;
   foto?: string;
   puntosTotales: number;
@@ -32,6 +44,7 @@ export interface IParticipant extends Document {
 
 // ---------- Semana / Turno ----------
 export interface IWeek extends Document {
+  torneoId: Types.ObjectId;
   numero: number;
   etiqueta: string; // ej: "Semana 1" o "22 jun - 28 jun"
   fechaInicio: Date;
@@ -48,6 +61,7 @@ export interface ICheckItem {
 
 // ---------- Registro semanal de un participante (los checkboxes) ----------
 export interface IWeeklyRecord extends Document {
+  torneoId: Types.ObjectId;
   weekId: Types.ObjectId;
   participantId: Types.ObjectId;
   checks: ICheckItem[];
