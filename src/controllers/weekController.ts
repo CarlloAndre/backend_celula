@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import Week from "../models/Week";
+import WeeklyRecord from "../models/WeeklyRecord";
 import { AuthRequest } from "../middleware/auth";
+import { recalcularPuntosTotales } from "./weeklyRecordController";
 
 // GET /api/weeks?torneoId=...  -> lista todas las semanas de un torneo (más reciente primero)
 export const getWeeks = async (req: Request, res: Response): Promise<void> => {
@@ -99,7 +101,21 @@ export const deleteWeek = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
+    // Antes de borrar la semana, buscamos qué participantes tenían puntos
+    // registrados en ella, para poder restarles esos puntos del total.
+    const registros = await WeeklyRecord.find({ weekId: id });
+    const participantIds = [
+      ...new Set(registros.map((r) => r.participantId.toString())),
+    ];
+
+    // Borramos los registros de esa semana (si no, quedarían huérfanos y
+    // sus puntos se seguirían contando en el total aunque la semana ya no exista).
+    await WeeklyRecord.deleteMany({ weekId: id });
     await Week.findByIdAndDelete(id);
+
+    // Recalculamos el total de cada participante afectado, ahora sin esos puntos.
+    await Promise.all(participantIds.map((pid) => recalcularPuntosTotales(pid)));
+
     res.json({ message: "Semana eliminada correctamente." });
   } catch (error) {
     res.status(500).json({ message: "Error al eliminar semana.", error });
