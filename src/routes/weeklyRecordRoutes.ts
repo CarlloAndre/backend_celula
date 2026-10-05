@@ -17,4 +17,3 @@ router.post("/", requireAuth, saveRecord); // solo admin: marcar checkboxes
 router.delete("/all", requireAuth, deleteAllRecords); // solo admin: borrar TODOS los puntos del torneo
 
 export default router;
- 
