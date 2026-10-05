@@ -9,7 +9,7 @@ import { AuthRequest } from "../middleware/auth";
 // Se llama cada vez que se guarda/edita un registro, así el total siempre queda exacto
 // incluso si el admin corrige una semana pasada.
 // (No hace falta filtrar por torneo aquí: un participantId ya pertenece a un solo torneo.)
-const recalcularPuntosTotales = async (participantId: string): Promise<void> => {
+export const recalcularPuntosTotales = async (participantId: string): Promise<void> => {
   const records = await WeeklyRecord.find({ participantId });
   const total = records.reduce(
     (sum: number, r: IWeeklyRecord) => sum + r.puntosGanados,
