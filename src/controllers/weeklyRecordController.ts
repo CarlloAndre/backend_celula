@@ -139,3 +139,40 @@ export const getLeaderboard = async (req: Request, res: Response): Promise<void>
     res.status(500).json({ message: "Error al obtener el top.", error });
   }
 };
+
+// DELETE /api/weekly-records/all?torneoId=...  (solo admin)
+// Borra TODOS los registros de puntos del torneo (incluyendo los huérfanos,
+// es decir, los de semanas que ya no existen) y deja en 0 los puntos totales
+// de todos los participantes. No borra semanas, participantes ni criterios.
+export const deleteAllRecords = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const torneoId = req.query.torneoId as string;
+
+    if (!torneoId) {
+      res.status(400).json({ message: "Se requiere torneoId." });
+      return;
+    }
+
+    if (torneoId !== req.adminTorneoId) {
+      res.status(403).json({ message: "No tienes acceso a este torneo." });
+      return;
+    }
+
+    // Registros viejos (anteriores a los torneos) pueden no tener torneoId,
+    // por eso también buscamos por los participantes del torneo.
+    const participantes = await Participant.find({ torneoId }).select("_id");
+    const participantIds = participantes.map((p) => p._id);
+
+    const { deletedCount } = await WeeklyRecord.deleteMany({
+      $or: [{ torneoId }, { participantId: { $in: participantIds } }],
+    });
+    await Participant.updateMany({ torneoId }, { puntosTotales: 0 });
+
+    res.json({
+      message: "Todos los puntos fueron eliminados.",
+      registrosEliminados: deletedCount,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Error al eliminar los puntos.", error });
+  }
+};
