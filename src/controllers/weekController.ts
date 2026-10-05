@@ -1,11 +1,128 @@
 import { Request, Response } from "express";
-import Week from "../models/Week";
 import WeeklyRecord from "../models/WeeklyRecord";
+import Criteria from "../models/Criteria";
+import Participant from "../models/Participant";
+import { IWeeklyRecord, ICriteria } from "../types";
 import { AuthRequest } from "../middleware/auth";
-import { recalcularPuntosTotales } from "./weeklyRecordController";
 
-// GET /api/weeks?torneoId=...  -> lista todas las semanas de un torneo (más reciente primero)
-export const getWeeks = async (req: Request, res: Response): Promise<void> => {
+// Recalcula los puntos totales de un participante sumando TODOS sus registros semanales.
+// Se llama cada vez que se guarda/edita un registro, así el total siempre queda exacto
+// incluso si el admin corrige una semana pasada.
+// (No hace falta filtrar por torneo aquí: un participantId ya pertenece a un solo torneo.)
+export const recalcularPuntosTotales = async (participantId: string): Promise<void> => {
+  const records = await WeeklyRecord.find({ participantId });
+  const total = records.reduce(
+    (sum: number, r: IWeeklyRecord) => sum + r.puntosGanados,
+    0
+  );
+  await Participant.findByIdAndUpdate(participantId, { puntosTotales: total });
+};
+
+// GET /api/weekly-records?weekId=...&torneoId=...  -> todos los registros de una semana (con detalle)
+export const getRecordsByWeek = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { weekId, torneoId } = req.query;
+
+    if (!weekId || !torneoId) {
+      res.status(400).json({ message: "Se requiere weekId y torneoId." });
+      return;
+    }
+
+    const records = await WeeklyRecord.find({ weekId, torneoId })
+      .populate("participantId", "nombre foto activo")
+      .populate("checks.criteriaId", "nombre puntos tipo puntosMaximos");
+
+    res.json(records);
+  } catch (error) {
+    res.status(500).json({ message: "Error al obtener registros.", error });
+  }
+};
+
+// GET /api/weekly-records/participant/:participantId -> historial completo de un participante
+export const getRecordsByParticipant = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const { participantId } = req.params;
+
+    const records = await WeeklyRecord.find({ participantId })
+      .populate("weekId", "numero etiqueta fechaInicio fechaFin")
+      .populate("checks.criteriaId", "nombre puntos tipo puntosMaximos")
+      .sort({ createdAt: -1 });
+
+    res.json(records);
+  } catch (error) {
+    res.status(500).json({ message: "Error al obtener historial.", error });
+  }
+};
+
+// POST /api/weekly-records  (crear o actualizar el registro de un participante en una semana)
+// Body: { torneoId, weekId, participantId, checks: [{ criteriaId, marcado }] }
+// Es "upsert": si ya existe el registro para esa semana+participante, lo actualiza (siempre editable).
+export const saveRecord = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { torneoId, weekId, participantId, checks } = req.body;
+
+    if (!torneoId || !weekId || !participantId || !Array.isArray(checks)) {
+      res.status(400).json({
+        message: "torneoId, weekId, participantId y checks (array) son requeridos.",
+      });
+      return;
+    }
+
+    if (torneoId !== req.adminTorneoId) {
+      res.status(403).json({ message: "No tienes acceso a este torneo." });
+      return;
+    }
+
+    // Calculamos los puntos según los criterios marcados/ingresados
+    const criteriaIds = checks.map((c: { criteriaId: string }) => c.criteriaId);
+    const criteriaDocs = await Criteria.find({ _id: { $in: criteriaIds } });
+
+    let puntosGanados = 0;
+    const checksNormalizados = checks.map(
+      (check: { criteriaId: string; marcado?: boolean; valor?: number }) => {
+        const criterio = criteriaDocs.find(
+          (c: ICriteria) => c._id.toString() === check.criteriaId
+        );
+
+        if (criterio?.tipo === "manual") {
+          const max = criterio.puntosMaximos ?? 0;
+          let valor = Number(check.valor) || 0;
+          if (valor < 0) valor = 0;
+          if (valor > max) valor = max;
+          puntosGanados += valor;
+          return { criteriaId: check.criteriaId, marcado: valor > 0, valor };
+        }
+
+        const marcado = !!check.marcado;
+        if (marcado && criterio) puntosGanados += criterio.puntos;
+        return { criteriaId: check.criteriaId, marcado, valor: 0 };
+      }
+    );
+
+    const record = await WeeklyRecord.findOneAndUpdate(
+      { weekId, participantId },
+      { torneoId, weekId, participantId, checks: checksNormalizados, puntosGanados },
+      { new: true, upsert: true, runValidators: true }
+    );
+
+    // Mantenemos el total del participante siempre sincronizado
+    await recalcularPuntosTotales(participantId);
+
+    const populated = await WeeklyRecord.findById(record._id)
+      .populate("checks.criteriaId", "nombre puntos tipo puntosMaximos")
+      .populate("participantId", "nombre foto");
+
+    res.json(populated);
+  } catch (error) {
+    res.status(500).json({ message: "Error al guardar registro.", error });
+  }
+};
+
+// GET /api/weekly-records/leaderboard?torneoId=... -> Top de participantes ordenado por puntos
+export const getLeaderboard = async (req: Request, res: Response): Promise<void> => {
   try {
     const { torneoId } = req.query;
 
@@ -14,17 +131,22 @@ export const getWeeks = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    const weeks = await Week.find({ torneoId }).sort({ numero: -1 });
-    res.json(weeks);
+    const top = await Participant.find({ torneoId, activo: true }).sort({
+      puntosTotales: -1,
+    });
+    res.json(top);
   } catch (error) {
-    res.status(500).json({ message: "Error al obtener semanas.", error });
+    res.status(500).json({ message: "Error al obtener el top.", error });
   }
 };
 
-// POST /api/weeks  (crear nueva semana/turno - solo admin)
-export const createWeek = async (req: AuthRequest, res: Response): Promise<void> => {
+// DELETE /api/weekly-records/all?torneoId=...  (solo admin)
+// Borra TODOS los registros de puntos del torneo (incluyendo los huérfanos,
+// es decir, los de semanas que ya no existen) y deja en 0 los puntos totales
+// de todos los participantes. No borra semanas, participantes ni criterios.
+export const deleteAllRecords = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { torneoId, etiqueta, fechaInicio, fechaFin } = req.body;
+    const torneoId = req.query.torneoId as string;
 
     if (!torneoId) {
       res.status(400).json({ message: "Se requiere torneoId." });
@@ -36,88 +158,14 @@ export const createWeek = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    if (!etiqueta || !fechaInicio || !fechaFin) {
-      res.status(400).json({
-        message: "Etiqueta, fecha de inicio y fecha de fin son requeridas.",
-      });
-      return;
-    }
+    const { deletedCount } = await WeeklyRecord.deleteMany({ torneoId });
+    await Participant.updateMany({ torneoId }, { puntosTotales: 0 });
 
-    // El número de semana se calcula automáticamente (autoincremental por torneo)
-    const ultimaSemana = await Week.findOne({ torneoId }).sort({ numero: -1 });
-    const numero = ultimaSemana ? ultimaSemana.numero + 1 : 1;
-
-    const week = await Week.create({ torneoId, numero, etiqueta, fechaInicio, fechaFin });
-    res.status(201).json(week);
-  } catch (error) {
-    res.status(500).json({ message: "Error al crear semana.", error });
-  }
-};
-
-// PUT /api/weeks/:id  (editar semana - solo admin)
-export const updateWeek = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-    const { etiqueta, fechaInicio, fechaFin } = req.body;
-
-    const existente = await Week.findById(id);
-    if (!existente) {
-      res.status(404).json({ message: "Semana no encontrada." });
-      return;
-    }
-    if (existente.torneoId.toString() !== req.adminTorneoId) {
-      res.status(403).json({ message: "No tienes acceso a este torneo." });
-      return;
-    }
-
-    const cambios: Record<string, unknown> = {};
-    if (etiqueta !== undefined) cambios.etiqueta = etiqueta;
-    if (fechaInicio !== undefined) cambios.fechaInicio = fechaInicio;
-    if (fechaFin !== undefined) cambios.fechaFin = fechaFin;
-
-    const week = await Week.findByIdAndUpdate(id, cambios, {
-      new: true,
-      runValidators: true,
+    res.json({
+      message: "Todos los puntos fueron eliminados.",
+      registrosEliminados: deletedCount,
     });
-
-    res.json(week);
   } catch (error) {
-    res.status(500).json({ message: "Error al actualizar semana.", error });
-  }
-};
-
-// DELETE /api/weeks/:id  (solo admin, por si se crea una de más)
-export const deleteWeek = async (req: AuthRequest, res: Response): Promise<void> => {
-  try {
-    const { id } = req.params;
-
-    const existente = await Week.findById(id);
-    if (!existente) {
-      res.status(404).json({ message: "Semana no encontrada." });
-      return;
-    }
-    if (existente.torneoId.toString() !== req.adminTorneoId) {
-      res.status(403).json({ message: "No tienes acceso a este torneo." });
-      return;
-    }
-
-    // Antes de borrar la semana, buscamos qué participantes tenían puntos
-    // registrados en ella, para poder restarles esos puntos del total.
-    const registros = await WeeklyRecord.find({ weekId: id });
-    const participantIds = [
-      ...new Set(registros.map((r) => r.participantId.toString())),
-    ];
-
-    // Borramos los registros de esa semana (si no, quedarían huérfanos y
-    // sus puntos se seguirían contando en el total aunque la semana ya no exista).
-    await WeeklyRecord.deleteMany({ weekId: id });
-    await Week.findByIdAndDelete(id);
-
-    // Recalculamos el total de cada participante afectado, ahora sin esos puntos.
-    await Promise.all(participantIds.map((pid) => recalcularPuntosTotales(pid)));
-
-    res.json({ message: "Semana eliminada correctamente." });
-  } catch (error) {
-    res.status(500).json({ message: "Error al eliminar semana.", error });
+    res.status(500).json({ message: "Error al eliminar los puntos.", error });
   }
 };
